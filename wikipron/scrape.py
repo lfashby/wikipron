@@ -46,14 +46,15 @@ def _scrape_once(data, config: Config) -> Iterator[WordPronPair]:
     for member in data["query"]["categorymembers"]:
         title = member["title"]
         timestamp = member["timestamp"]
+        config.sortkey = member["sortkey"]  # unbelievably crude solution.
         if _skip_word(title, config.skip_spaces_word) or _skip_date(
             timestamp, config.cut_off_date
         ):
             continue
+        #  ASSUME THAT THE ERROR NEVER OCCUR HERE...
         request = session.get(
             _PAGE_TEMPLATE.format(word=title), timeout=10, headers=HTTP_HEADERS
         )
-
         for word, pron in config.extract_word_pron(title, request, config):
             # Pronunciation processing is done in NFD-space;
             # we convert back to NFC aftewards.
@@ -71,16 +72,30 @@ def scrape(config: Config) -> Iterator[WordPronPair]:
         "list": "categorymembers",
         "cmtitle": category,
         "cmlimit": "500",
-        "cmprop": "ids|title|timestamp",
+        "cmprop": "ids|title|timestamp|sortkey",
     }
     while True:
-        data = requests.get(
-            "https://en.wiktionary.org/w/api.php?",
-            params=requests_params,
-            headers=HTTP_HEADERS,
-        ).json()
-        yield from _scrape_once(data, config)
-        if "continue" not in data:
-            break
-        continue_code = data["continue"]["cmcontinue"]
-        requests_params.update({"cmcontinue": continue_code})
+        print("NEXT 500 ---------------")
+        try:
+            data = requests.get(
+                "https://en.wiktionary.org/w/api.php?",
+                params=requests_params,
+                headers=HTTP_HEADERS,
+            ).json()
+            yield from _scrape_once(data, config)
+            if "continue" not in data:
+                break
+            continue_code = data["continue"]["cmcontinue"]
+            requests_params.update({"cmcontinue": continue_code})
+        except (
+            requests.exceptions.Timeout,
+            requests.exceptions.ConnectionError,
+        ):
+            # modify params
+            print("Caught ya! ------------------")
+            requests_params.update(
+                {
+                    "cmsort": "sortkey",
+                    "cmstarthexsortkey": config.sortkey
+                }
+            )
